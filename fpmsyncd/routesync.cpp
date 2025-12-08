@@ -22,6 +22,7 @@ using namespace std;
 using namespace swss;
 
 #define VXLAN_IF_NAME_PREFIX    "Brvxlan"
+#define VXLAN_NAME_PREFIX       "Vxlan"
 #define VNET_PREFIX             "Vnet"
 #define VRF_PREFIX              "Vrf"
 #define MGMT_VRF_PREFIX         "mgmt"
@@ -167,6 +168,9 @@ RouteSync::RouteSync(RedisPipeline *pipeline) :
     m_nl_sock = nl_socket_alloc();
     nl_connect(m_nl_sock, NETLINK_ROUTE);
     rtnl_link_alloc_cache(m_nl_sock, AF_UNSPEC, &m_link_cache);
+
+    app_db_ = shared_ptr<DBConnector>(new DBConnector("APPL_DB", 0));
+    vnet_tunnel_route_table_ = unique_ptr<Table>(new Table(app_db_.get(), APP_VNET_RT_TUNNEL_TABLE_NAME));
 }
 
 void RouteSync::setRouteWithWarmRestart(FieldValueTupleWrapperBase & fvw,
@@ -1041,6 +1045,8 @@ vector<FieldValueTuple>
 VnetTunnelTableFieldValueTupleWrapper::fieldValueTupleVector() {
     vector<FieldValueTuple> fvVector;
     fvVector.push_back(FieldValueTuple("endpoint", endpoint.c_str()));
+    fvVector.push_back(FieldValueTuple("mac_address", mac_address.c_str()));
+    fvVector.push_back(FieldValueTuple("vni", vni.c_str()));
     return fvVector;
 }
 
@@ -2681,14 +2687,53 @@ void RouteSync::onVnetRouteMsg(int nlmsg_type, struct nl_object *obj, string vne
     string nexthops = getNextHopGw(route_obj);
     string ifnames = getNextHopIf(route_obj);
 
-    /* If the the first interface name starts with VXLAN_IF_NAME_PREFIX,
+    /* If the the first interface name starts with VXLAN_IF_NAME_PREFIX or VXLAN_NAME_PREFIX,
        the route is a VXLAN tunnel route. */
-    if (ifnames.find(VXLAN_IF_NAME_PREFIX) == 0)
+    if (ifnames.find(VXLAN_IF_NAME_PREFIX) == 0 || ifnames.find(VXLAN_NAME_PREFIX) == 0)
     {
+        if (nexthops.empty() || nexthops == "0.0.0.0" || nexthops == "::")
+        {
+            SWSS_LOG_INFO("Nexthop list is empty for VXLAN tunnel route %s, NH= %s", vnet_dip.c_str(), nexthops.c_str());
+            return;
+        }
         SWSS_LOG_DEBUG("%s set msg: %s %s",
                        APP_VNET_RT_TUNNEL_TABLE_NAME, vnet_dip.c_str(), nexthops.c_str());
         VnetTunnelTableFieldValueTupleWrapper fvw{std::move(vnet_dip)};
-        fvw.endpoint = std::move(nexthops);
+
+        // Check if there is a route for the overlay NH. Use the underlay endpoint as the NH if there is a route.
+        std::vector<FieldValueTuple> fieldValues;
+        string nh_key = vnet + string(":") + nexthops + "/32";
+        SWSS_LOG_DEBUG("Checking if there is a route for the overlay NH: %s", nh_key.c_str());
+        if (vnet_tunnel_route_table_->get(nh_key, fieldValues))
+        {
+            SWSS_LOG_DEBUG("Found a route for the overlay NH. Use the underlay endpoint as the NH");
+
+            // Iterate over the field values to get the underlay endpoint
+            for (const auto& fv : fieldValues)
+            {
+                if (fv.first == "endpoint")
+                {
+                    SWSS_LOG_DEBUG("Using underlay endpoint: %s", fv.second.c_str());
+                    fvw.endpoint = fv.second;
+                }
+                else if (fv.first == "mac_address")
+                {
+                    SWSS_LOG_DEBUG("Using overlay MAC: %s", fv.second.c_str());
+                    fvw.mac_address = fv.second;
+                }
+                else if (fv.first == "vni")
+                {
+                    SWSS_LOG_DEBUG("Using overlay VNI: %s", fv.second.c_str());
+                    fvw.vni = fv.second;
+                }
+            }
+        }
+        else
+        {
+            SWSS_LOG_DEBUG("No route for the overlay NH. Use the overlay NH as the NH");
+            fvw.endpoint = std::move(nexthops);
+        }
+
         setTable(fvw, m_vnet_tunnelTable);
         return;
     }

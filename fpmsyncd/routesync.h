@@ -149,6 +149,8 @@ class VnetTunnelTableFieldValueTupleWrapper : public FieldValueTupleWrapperBase 
     vector<FieldValueTuple> fieldValueTupleVector() override;
 
     string endpoint = string();
+    string vni = string();
+    string mac_address = string();
 };
 
 class NextHopGroupTableFieldValueTupleWrapper : public FieldValueTupleWrapperBase {
@@ -267,6 +269,9 @@ private:
     map<uint32_t,NextHopGroup> m_nh_groups;
     /* SID list to refcount */
     map<string, uint32_t> m_srv6_sidlist_refcnt;
+
+    shared_ptr<DBConnector> app_db_;
+    unique_ptr<Table> vnet_tunnel_route_table_;
 
     bool                m_isSuppressionEnabled{false};
     FpmInterface*       m_fpmInterface {nullptr};
