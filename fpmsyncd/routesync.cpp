@@ -2695,6 +2695,12 @@ void RouteSync::onVnetRouteMsg(int nlmsg_type, struct nl_object *obj, string vne
     /* Regular VNET route */
     else
     {
+        if (nexthops.empty() || nexthops == "0.0.0.0" || nexthops == "::")
+        {
+            SWSS_LOG_INFO("Nexthop list is empty for VXLAN tunnel route %s, NH= %s", vnet_dip.c_str(), nexthops.c_str());
+            return;
+        }
+        
         VnetRouteTableFieldValueTupleWrapper fvw{vnet_dip};
         fvw.ifname = ifnames;
 
