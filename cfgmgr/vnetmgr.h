@@ -32,7 +32,6 @@ public:
     {
         std::vector<FieldValueTuple> fvt;
         std::string m_sourceIp;
-        uint32_t vlan_vni_refcnt;
     } TunCache;
 
     typedef struct VxlanRouteTunnelInfo
@@ -57,13 +56,28 @@ public:
         std::string m_vnet;
         std::string m_prefix;
         std::string m_vxlanDevName;
+        std::string m_vxlanSrcUdpPort
     } VxlanKernelRouteInfo;
 
 private:
     void doTask(Consumer &consumer);
+    std::vector<std::string> parseNetDev(const std::string& stdout);
+    void getAllVxlanNetDevices();
+    bool doVnetCreateTask(const KeyOpFieldsValuesTuple & t);
+    bool doVnetDeleteTask(const KeyOpFieldsValuesTuple & t);
+    bool doVxlanTunnelCreateTask(const KeyOpFieldsValuesTuple & t);
+    bool doVxlanTunnelDeleteTask(const KeyOpFieldsValuesTuple & t);
+    bool doVnetRouteTask(const KeyOpFieldsValuesTuple & t, const string & op);
+    bool doVnetRouteTunnelCreateTask(const KeyOpFieldsValuesTuple & t);
+    bool doVnetRouteTunnelDeleteTask(const KeyOpFieldsValuesTuple & t);
 
-    Table m_cfgVxlanTunnelTable,m_cfgVnetTable,m_stateVrfTable,m_stateVxlanTable, m_stateVxlanTunnelTable;
-    ProducerStateTable m_vnet_tunnelTable;
+    bool createKernelRoute(const VxlanRouteTunnelInfo & vxlanRouteInfo);
+    bool deleteKernelRoute(const VxlanRouteTunnelInfo & vxlanRouteInfo);
+    string getVxlanSourcePort();
+
+
+    Table m_appSwitchTable;
+    ProducerStateTable m_appVnetRouteTunnelTable, m_appVnetRouteTable;
 
     DBConnector *m_app_db;
 

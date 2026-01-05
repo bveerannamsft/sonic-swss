@@ -30,18 +30,17 @@ extern MacAddress gMacAddress;
 #define VNET "vnet"
 #define VXLAN "vxlan"
 #define VXLAN_NAME_PREFIX "Vxlan"
+#define VXLAN_SRC_PORT "vxlan_sport"
+#define SWITCH "switch"
 
 #define RET_SUCCESS 0
 
 VnetMgr::VnetMgr(DBConnector *cfgDb, DBConnector *appDb, DBConnector *stateDb, const vector<std::string> &tables) :
         m_app_db(appDb),
         Orch(cfgDb, tables),
-        m_vnet_tunnelTable(appDb, APP_VNET_RT_TUNNEL_TABLE_NAME),
-        m_cfgVxlanTunnelTable(cfgDb, CFG_VXLAN_TUNNEL_TABLE_NAME),
-        m_cfgVnetTable(cfgDb, CFG_VNET_TABLE_NAME),
-        m_stateVrfTable(stateDb, STATE_VRF_TABLE_NAME),
-        m_stateVxlanTable(stateDb, STATE_VXLAN_TABLE_NAME),
-        m_stateVxlanTunnelTable(stateDb, STATE_VXLAN_TUNNEL_TABLE_NAME)
+        m_appVnetRouteTable(appDb, APP_VNET_RT_TABLE_NAME),
+        m_appVnetRouteTunnelTable(appDb, APP_VNET_RT_TUNNEL_TABLE_NAME)
+        m_appSwitchTable(appDb, APP_SWITCH_TABLE_NAME),
 {
     getAllVxlanNetDevices();
 }
@@ -85,6 +84,27 @@ void VnetMgr::getAllVxlanNetDevices()
     return;
 }
 
+std::string VnetMgr::getVxlanSourcePort()
+{
+    std::vector<FieldValueTuple> temp;
+
+    if (m_appSwitchTable.get(SWITCH, temp))
+    {
+        auto itr = std::find_if(
+            temp.begin(),
+            temp.end(),
+            [](const FieldValueTuple &fvt) { return fvt.first == VXLAN_SRC_PORT; });
+        if (itr != temp.end() && !(itr->second.empty()))
+        {
+            SWSS_LOG_DEBUG("Using Vxlan source port %s", itr->second.c_str());
+            return itr->second;
+        }
+    }
+    
+    SWSS_LOG_DEBUG("Using default Vxlan source port: 4789");
+    return "4789"; // default port
+}
+
 void VnetMgr::doTask(Consumer &consumer)
 {
     SWSS_LOG_ENTER();
@@ -111,6 +131,10 @@ void VnetMgr::doTask(Consumer &consumer)
             {
                 task_result = doVnetRouteTunnelCreateTask(t);
             }
+            else if (table_name == CFG_VNET_RT_TABLE_NAME)
+            {
+                task_result = doVnetRouteTask(t, op);
+            }
             else
             {
                 SWSS_LOG_ERROR("Unknown table : %s", table_name.c_str());
@@ -129,6 +153,10 @@ void VnetMgr::doTask(Consumer &consumer)
             else if (table_name == CFG_VNET_RT_TUNNEL_TABLE_NAME)
             {
                 task_result = doVnetRouteTunnelDeleteTask(t);
+            }
+            else if (table_name == CFG_VNET_RT_TABLE_NAME)
+            {
+                task_result = doVnetRouteTask(t, op);
             }
             else
             {
@@ -251,7 +279,6 @@ bool VnetMgr::doVxlanTunnelCreateTask(const KeyOpFieldsValuesTuple & t)
     TunCache tuncache;
 
     tuncache.fvt = kfvFieldsValues(t);
-    tuncache.vlan_vni_refcnt = 0;
     tuncache.m_sourceIp = "NULL";
 
     for (auto i : kfvFieldsValues(t))
@@ -286,6 +313,31 @@ bool VnetMgr::doVxlanTunnelDeleteTask(const KeyOpFieldsValuesTuple & t)
     m_vxlanTunnelCache.erase(it);
 
     SWSS_LOG_INFO("Delete vxlan tunnel %s", vxlanTunnelName.c_str());
+
+    return true;
+}
+
+bool VnetMgr::doVnetRouteTask(const KeyOpFieldsValuesTuple & t, const string & op)
+{
+    SWSS_LOG_ENTER();
+
+    string vnetRouteName = kfvKey(t);
+    replace(vnetRouteName.begin(), vnetRouteName.end(), config_db_key_delimiter, delimiter);
+    if (op == SET_COMMAND)
+    {
+        m_appVnetRouteTable.set(vnetRouteName, kfvFieldsValues(t));
+        SWSS_LOG_INFO("Create vnet route %s", vnetRouteName.c_str());
+    }
+    else if (op == DEL_COMMAND)
+    {
+        m_appVnetRouteTable.del(vnetRouteName);
+        SWSS_LOG_INFO("Delete vnet route %s", vnetRouteName.c_str());
+    }
+    else
+    {
+        SWSS_LOG_ERROR("Unknown command : %s", op.c_str());
+        return false;
+    }
 
     return true;
 }
@@ -406,6 +458,7 @@ bool VnetMgr::createKernelRoute(const VxlanRouteTunnelInfo & vxlanRouteInfo)
     vxlanKernelRouteInfo.m_srcIp = vnetInfo.m_sourceIp;
     vxlanKernelRouteInfo.m_srcMac = vnetInfo.m_macAddress;
     vxlanKernelRouteInfo.m_vxlanDevName = vxlanDevName;
+    vxlanKernelRouteInfo.m_vxlanSrcUdpPort = getVxlanSourcePort();
 
     // Create Vxlan Device
     std::string res;
@@ -453,7 +506,7 @@ bool VnetMgr::createKernelRoute(const VxlanRouteTunnelInfo & vxlanRouteInfo)
         return false;
     }
 
-    m_kernelRouteTunnelCache[vxlanRouteInfo.m_routeName] = vxlanRouteInfo;
+    m_kernelRouteTunnelCache[vxlanRouteInfo.m_routeName] = vxlanKernelRouteInfo;
     m_vxlanNetDevices[vxlanDevName] = VXLAN;
 
     SWSS_LOG_NOTICE("Create kernel route %s", vxlanRouteInfo.m_routeName.c_str());
@@ -470,7 +523,7 @@ bool VnetMgr::deleteKernelRoute(const VxlanRouteTunnelInfo & vxlanRouteInfo)
         return true;
     }
     
-    int ret = cmdDeleteVxlan(vxlanRouteInfo, res);
+    int ret = cmdDeleteVxlan(it->second, res);
     if (ret != RET_SUCCESS)
     {
         SWSS_LOG_ERROR("Vxlan device %s deletion failed: %s", 
@@ -515,7 +568,7 @@ static int cmdCreateVxlan(const swss::VnetMgr::VxlanKernelRouteInfo & info, std:
     {
         cmd << " remote " << shellquote(info.m_dstIp);
     }
-    cmd << " dstport 4789";
+    cmd << " dstport " << shellquote(info.m_vxlanSrcUdpPort);
     return swss::exec(cmd.str(), res);
 }
 

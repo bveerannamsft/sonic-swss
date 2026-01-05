@@ -45,6 +45,7 @@ int main(int argc, char **argv)
             CFG_VNET_TABLE_NAME,
             CFG_VXLAN_TUNNEL_TABLE_NAME,
             CFG_VNET_RT_TUNNEL_TABLE_NAME,
+            CFG_VNET_RT_TABLE_NAME
         };
 
         VnetMgr vnetmgr(&cfgDb, &appDb, &stateDb, cfg_vnet_tables);
