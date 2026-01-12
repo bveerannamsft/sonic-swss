@@ -5,7 +5,7 @@ LIBNL_LIBS = -lnl-genl-3 -lnl-route-3 -lnl-3
 SAIMETA_LIBS = -lsaimeta -lsaimetadata -lzmq
 COMMON_LIBS = -lswsscommon -lpthread
 
-bin_PROGRAMS = vlanmgrd teammgrd portmgrd intfmgrd buffermgrd vrfmgrd nbrmgrd vxlanmgrd sflowmgrd natmgrd coppmgrd tunnelmgrd macsecmgrd fabricmgrd stpmgrd
+bin_PROGRAMS = vlanmgrd teammgrd portmgrd intfmgrd buffermgrd vrfmgrd nbrmgrd vxlanmgrd vnetmgrd sflowmgrd natmgrd coppmgrd tunnelmgrd macsecmgrd fabricmgrd stpmgrd
 
 cfgmgrdir = $(datadir)/swss
 

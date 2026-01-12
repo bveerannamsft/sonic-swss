@@ -23,7 +23,7 @@ using namespace swss;
 
 int main(int argc, char **argv)
 {
-    Logger::linkToDbNative("vnetmgrd");
+    swss::Logger::linkToDbNative("vnetmgrd");
 
     SWSS_LOG_NOTICE("--- Starting vnetmgrd ---");
 
@@ -32,7 +32,6 @@ int main(int argc, char **argv)
 
         DBConnector cfgDb("CONFIG_DB", 0);
         DBConnector appDb("APPL_DB", 0);
-        DBConnector stateDb("STATE_DB", 0);
 
         WarmStart::initialize("vnetmgrd", "swss");
         WarmStart::checkWarmStart("vnetmgrd", "swss");
@@ -48,7 +47,7 @@ int main(int argc, char **argv)
             CFG_VNET_RT_TABLE_NAME
         };
 
-        VnetMgr vnetmgr(&cfgDb, &appDb, &stateDb, cfg_vnet_tables);
+        VNetMgr vnetmgr(&cfgDb, &appDb, cfg_vnet_tables);
 
         std::vector<Orch *> cfgOrchList = {&vnetmgr};
 

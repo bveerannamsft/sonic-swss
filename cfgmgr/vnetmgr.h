@@ -13,10 +13,11 @@
 #include <utility>
 
 namespace swss {
+
 class VNetMgr : public Orch
 {
 public:
-    VNetMgr(DBConnector *db, const std::vector<TableConnector> &tables);
+    VNetMgr(DBConnector *cfgDb, DBConnector *appDb, const std::vector<std::string> &tables);
     using Orch::doTask;
 
     typedef struct VnetInfo
@@ -42,7 +43,7 @@ public:
         std::string m_vni;
         std::string m_vnet;
         std::string m_prefix;
-        std::bool m_installOnKernel;
+        bool m_installOnKernel;
     } VxlanRouteTunnelInfo;
 
     typedef struct VxlanKernelRouteInfo
@@ -56,7 +57,7 @@ public:
         std::string m_vnet;
         std::string m_prefix;
         std::string m_vxlanDevName;
-        std::string m_vxlanSrcUdpPort
+        std::string m_vxlanSrcUdpPort;
     } VxlanKernelRouteInfo;
 
 private:
@@ -67,13 +68,13 @@ private:
     bool doVnetDeleteTask(const KeyOpFieldsValuesTuple & t);
     bool doVxlanTunnelCreateTask(const KeyOpFieldsValuesTuple & t);
     bool doVxlanTunnelDeleteTask(const KeyOpFieldsValuesTuple & t);
-    bool doVnetRouteTask(const KeyOpFieldsValuesTuple & t, const string & op);
+    bool doVnetRouteTask(const KeyOpFieldsValuesTuple & t, const std::string & op);
     bool doVnetRouteTunnelCreateTask(const KeyOpFieldsValuesTuple & t);
     bool doVnetRouteTunnelDeleteTask(const KeyOpFieldsValuesTuple & t);
 
     bool createKernelRoute(const VxlanRouteTunnelInfo & vxlanRouteInfo);
     bool deleteKernelRoute(const VxlanRouteTunnelInfo & vxlanRouteInfo);
-    string getVxlanSourcePort();
+    std::string getVxlanSourcePort();
 
 
     Table m_appSwitchTable;
@@ -87,6 +88,7 @@ private:
     std::map<std::string, VxlanRouteTunnelInfo> m_vnetRouteTunnelCache;
     std::map<std::string, VxlanKernelRouteInfo> m_kernelRouteTunnelCache;
 };
+
 } // namespace swss
 
 #endif
