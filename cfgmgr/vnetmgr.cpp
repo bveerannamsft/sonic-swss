@@ -49,8 +49,7 @@ static int cmdCreateVxlan(const swss::VNetMgr::VxlanKernelRouteInfo & info, std:
     }
 
     cmd << " type vxlan id "
-        << shellquote(info.m_vni)
-        << " ";
+        << shellquote(info.m_vni);
 
     if (!info.m_srcIp.empty())
     {
@@ -108,8 +107,13 @@ static int cmdCreateKernelRoute(const swss::VNetMgr::VxlanKernelRouteInfo & info
     return swss::exec(cmd.str(), res);
 }
 
-static bool shouldAddStaticMacEntry(const std::string prefix) {
+static bool shouldAddStaticMacEntry(const std::string prefix, std::string &address) {
     size_t slashPos = prefix.find('/');
+    if (slashPos == std::string::npos) {
+        return false;
+    }
+    
+    address = prefix.substr(0, slashPos);
     int prefixLen = std::stoi(prefix.substr(slashPos + 1));
 
     // Add a static MAC entry only for /32 IPv4 or /128 IPv6 prefix
@@ -125,14 +129,15 @@ static bool shouldAddStaticMacEntry(const std::string prefix) {
 
 static int cmdCreateStaticMacEntry(const swss::VNetMgr::VxlanKernelRouteInfo & info, std::string & res)
 {
-    if (!shouldAddStaticMacEntry(info.m_prefix)) {
+    std::string address;
+    if (!shouldAddStaticMacEntry(info.m_prefix, address)) {
         return RET_SUCCESS;
     }
 
     // ip neigh add {{PREFIX}} lladdr {{DEST MAC}} dev {{VXLAN_IF}}
     ostringstream cmd;
     cmd << IP_CMD " neigh add "
-        << shellquote(info.m_prefix)
+        << shellquote(address)
         << " lladdr "
         << shellquote(info.m_dstMac)
         << " dev "
@@ -157,7 +162,7 @@ std::vector<std::string> VNetMgr::parseNetDev(const std::string& stdout){
     auto lines = tokenize(stdout, '\n');
     for (const std::string & line : lines)
     {
-        SWSS_LOG_DEBUG("line : %s\n",line.c_str());
+        SWSS_LOG_NOTICE("line : %s\n",line.c_str());
         if (!std::regex_search(line, match_result, device_name_pattern))
         {
             continue;
@@ -183,6 +188,7 @@ void VNetMgr::getAllVxlanNetDevices()
     std::vector<std::string> netdevs = parseNetDev(stdout);
     for (auto netdev : netdevs)
     {
+        SWSS_LOG_NOTICE("Found vxlan device: %s", netdev.c_str());
         m_vxlanNetDevices[netdev] = VXLAN;
     }
 
@@ -327,22 +333,14 @@ bool VNetMgr::doVnetCreateTask(const KeyOpFieldsValuesTuple & t)
         // Suspend this message until the vxlan tunnel is created
         return false;
     }
-    
-    auto sourceIp = std::find_if(
-        it->second.fvt.begin(),
-        it->second.fvt.end(),
-        [](const FieldValueTuple & fvt){ return fvt.first == SOURCE_IP; });
-    if (sourceIp  != it->second.fvt.end())
-    {
-        info.m_sourceIp = sourceIp->second;
-    }
 
+    info.m_sourceIp = it->second.m_sourceIp;
     m_vnetCache[info.m_vnet] = info;
 
     std::string vxlan_dev_name = VXLAN_NAME_PREFIX + info.m_vni;
     m_vxlanNetDevices[vxlan_dev_name] = VXLAN;
 
-    SWSS_LOG_NOTICE("Create VNET %s", info.m_vnet.c_str());
+    SWSS_LOG_NOTICE("Create VNET %s, vni: %s, src_ip: %s, src_mac: %s", info.m_vnet.c_str(), info.m_vni.c_str(), info.m_sourceIp.c_str(), info.m_macAddress.c_str());
 
     return true;
 }
@@ -398,7 +396,7 @@ bool VNetMgr::doVxlanTunnelCreateTask(const KeyOpFieldsValuesTuple & t)
 
     m_vxlanTunnelCache[vxlanTunnelName] = tuncache;
 
-    SWSS_LOG_NOTICE("Create vxlan tunnel %s", vxlanTunnelName.c_str());
+    SWSS_LOG_NOTICE("Create vxlan tunnel %s, src_ip: %s", vxlanTunnelName.c_str(), tuncache.m_sourceIp.c_str());
     return true;
 }
 
@@ -460,6 +458,11 @@ bool VNetMgr::doVnetRouteTunnelCreateTask(const KeyOpFieldsValuesTuple & t)
     routeInfo.m_vni = "NULL";
     routeInfo.m_installOnKernel = false;
 
+    size_t delimiter_pos;
+    delimiter_pos = vnet_route_name.find_first_of(config_db_key_delimiter);
+    routeInfo.m_vnet = vnet_route_name.substr(0, delimiter_pos);
+    routeInfo.m_prefix = vnet_route_name.substr(delimiter_pos + 1);
+
     for (auto i : kfvFieldsValues(t))
     {
         const std::string & field = fvField(i);
@@ -482,6 +485,8 @@ bool VNetMgr::doVnetRouteTunnelCreateTask(const KeyOpFieldsValuesTuple & t)
         }
     }
 
+    SWSS_LOG_NOTICE("Create vxlan tunnel route for vnet %s and prefix %s, dst_ip: %s, dst_mac: %s, vni: %s", routeInfo.m_vnet.c_str(), routeInfo.m_prefix.c_str(), routeInfo.m_endpoint.c_str(), routeInfo.m_macAddress.c_str(), routeInfo.m_vni.c_str());
+
     routeInfo.m_routeName = vnet_route_name;
     m_vnetRouteTunnelCache[vnet_route_name] = routeInfo;
 
@@ -500,8 +505,10 @@ bool VNetMgr::doVnetRouteTunnelCreateTask(const KeyOpFieldsValuesTuple & t)
         deleteKernelRoute(routeInfo);
     }
 
-    m_appVnetRouteTunnelTable.set(vnet_route_name, kfvFieldsValues(t));
-    SWSS_LOG_NOTICE("Create vxlan tunnel route %s", vnet_route_name.c_str());
+    string vnetRouteTunnelName = kfvKey(t);
+    replace(vnetRouteTunnelName.begin(), vnetRouteTunnelName.end(), config_db_key_delimiter, delimiter);
+    m_appVnetRouteTunnelTable.set(vnetRouteTunnelName, kfvFieldsValues(t));
+    SWSS_LOG_NOTICE("Create vxlan tunnel route %s", vnetRouteTunnelName.c_str());
     return true;
 }
 
@@ -555,8 +562,8 @@ bool VNetMgr::createKernelRoute(const VxlanRouteTunnelInfo & vxlanRouteInfo)
     auto it = m_vxlanNetDevices.find(vxlanDevName);
     if (it != m_vxlanNetDevices.end())
     {
-        SWSS_LOG_INFO("Vxlan device %s already present", vxlanDevName.c_str());
-        return false;
+        SWSS_LOG_INFO("Vxlan device %s already present", it->first.c_str());
+        //return false;
     }
 
     VxlanKernelRouteInfo vxlanKernelRouteInfo;
